@@ -75,11 +75,15 @@ def batched(iterable, n):
         yield batch
 
 
+from db import session_builder, SaleOrder
+
 parser = cli_parser()
 args   = parser.parse_args()
 
 stream    = manage_input(args.input)
 delimiter = args.delimiter
+
+CHUNK_SIZE = 100_000
 with stream as file:
     reader = csv.reader(file, delimiter = delimiter)
 
@@ -92,6 +96,23 @@ with stream as file:
     header = next(reader)
     print('HEADER', header)
 
-    # TODO: IMPROVE SOLUTION AND REMOVE ITERTOOLS
-    for line in itertools.islice(reader, 10):
-        print('GOT', line)
+    from datetime import date
+    cast_date = date.fromisoformat
+
+    with session_builder() as session:
+        # TODO: IMPROVE SOLUTION AND REMOVE ITERTOOLS
+
+        with session.begin():
+            for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
+                print('Bulk no.', i, 'Starting by', i * CHUNK_SIZE)
+                for line in chunk:
+                    # print('GOT', line)
+
+                    s = SaleOrder(
+                        PointOfSale = line[0],
+                        Product = line[1],
+                        Date = line[2],
+                        Stock = line[3],
+                        )
+                    session.add(s)
+
