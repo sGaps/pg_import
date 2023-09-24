@@ -76,6 +76,8 @@ def batched(iterable, n):
 
 
 from db import session_builder, SaleOrder
+from datetime import date
+cast_date = date.fromisoformat
 
 parser = cli_parser()
 args   = parser.parse_args()
@@ -83,9 +85,21 @@ args   = parser.parse_args()
 stream    = manage_input(args.input)
 delimiter = args.delimiter
 
-CHUNK_SIZE = 100_000
-with stream as file:
-    reader = csv.reader(file, delimiter = delimiter)
+
+# TODO: DELETE LATER
+import signal
+def signal_handler(sig, frame):
+    sig_obj = signal.Signals(sig)
+    raise InterruptedError(f'rolling back changes due the presence of the signal: {sig_obj.name} ({sig})')
+for s in (signal.SIGABRT, signal.SIGILL, signal.SIGINT, signal.SIGSEGV, signal.SIGTERM):
+    signal.signal(s, signal_handler)
+
+
+#CHUNK_SIZE = 655_350
+CHUNK_SIZE = 10_000
+with stream as file, session_builder() as session:
+    # reader = csv.reader(file, delimiter = delimiter)
+    reader = csv.DictReader(file, delimiter = delimiter)
 
     # NOTE: for now, we assume that we always have a header inside the csv files
     # NOTE: We can use DictReader, but it assumes that the header always have
@@ -93,26 +107,46 @@ with stream as file:
     #       utf-8 character that would lead to undefined behavior, so we must clean
     #       the names before translating these to 
     # NOTE: We could use DictReader, but it will imply a
-    header = next(reader)
-    print('HEADER', header)
+    print('HEADER', reader.fieldnames)
 
-    from datetime import date
-    cast_date = date.fromisoformat
+    # TODO: REMOVE PREVIOUSLY INSERTED RECORDS.
 
-    with session_builder() as session:
-        # TODO: IMPROVE SOLUTION AND REMOVE ITERTOOLS
+    records_inserted = []
 
-        with session.begin():
-            for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
-                print('Bulk no.', i, 'Starting by', i * CHUNK_SIZE)
-                for line in chunk:
-                    # print('GOT', line)
+    SaleOrderTable = SaleOrder.__table__
 
-                    s = SaleOrder(
-                        PointOfSale = line[0],
-                        Product = line[1],
-                        Date = line[2],
-                        Stock = line[3],
-                        )
-                    session.add(s)
+    import time
 
+    try:
+        # for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
+        for i, chunk in enumerate( batched(reader, CHUNK_SIZE) ):
+            with session.begin():
+                print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
+
+                statement = (SaleOrderTable.insert()
+                                .values(chunk)
+                                .returning(SaleOrderTable.c.id))
+
+
+                result = session.execute(statement)
+                row    = result.first()
+                if row:
+                    start_id = row[0]
+                    end_id   = start_id + CHUNK_SIZE - 1
+                    records_inserted.append( (start_id, end_id) )
+                else:
+                    print("Records couldn't be inserted on batch no.", i)
+    # TODO: Use atexit module?
+    except Exception as err:
+        print('Rolling back steps')
+        for start_id, end_id in records_inserted:
+            # Discard changes made on our process
+            with session.begin():
+                print('Deleting:', start_id, '...', end_id)
+                # Removing values directly
+                statement = SaleOrderTable.delete().where(
+                    SaleOrderTable.c.id >= start_id,
+                    SaleOrderTable.c.id <= end_id,
+                )
+                result = session.execute(statement)
+        raise
