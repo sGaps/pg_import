@@ -3,3 +3,5 @@
 data/
 *.txt
 credentials/
+logs/
+*__pycache__*

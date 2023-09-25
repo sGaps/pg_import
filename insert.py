@@ -75,7 +75,7 @@ def batched(iterable, n):
         yield batch
 
 
-from db import session_builder, SaleOrder
+from db import session_builder, SaleOrder, ImportRegistry
 from datetime import date
 cast_date = date.fromisoformat
 
@@ -120,7 +120,44 @@ with stream as file, session_builder() as session:
 
     SaleOrderTable = SaleOrder.__table__
 
-    import time
+    # with session.begin():
+    #     ImportRegistryTable = ImportRegistry.__table__
+    #     delete_query = """
+    #         DELETE FROM sale_order
+    #         WHERE id IN (
+    #             SELECT
+    #                 "start_id",
+    #                 "end_id"
+    #         )
+    #     """
+    #     sqlalchemy.select(
+    #         ImportRegistryTable.c.start_id,
+    #         ImportRegistryTable.c.end_id,
+    #     ).select_from(
+    #         S
+    #     )
+
+    #     ImportRegistryTable.c.start_id
+    #     ImportRegistryTable.c.end_id
+    #     pass
+    with session.begin():
+        cursor = session.connection().connection.cursor()
+        delete_query = """
+            -- | Remove the previous imports
+            DELETE FROM sale_order so_del
+                WHERE so_del.id IN (
+                    SELECT
+                        so.id
+                    FROM
+                        sale_order so
+                        JOIN import_registry ir
+                            ON (so.id >= ir.start_id AND so.id <= ir.end_id)
+                    GROUP BY so.id);
+
+            -- | Cleans the import registry
+            DELETE FROM import_registry;
+            """
+        cursor.execute(delete_query)
 
     try:
         for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
@@ -129,6 +166,7 @@ with stream as file, session_builder() as session:
                 # NOTE: usage of raw psycopg for efficiency
                 cursor = session.connection().connection.cursor()
 
+                # We use directly
                 insert_query = """
                     INSERT INTO sale_order("PointOfSale", "Product", "Date", "Stock")
                     VALUES (%s, %s, %s, %s)
@@ -144,53 +182,47 @@ with stream as file, session_builder() as session:
                 row = cursor.fetchone()
                 if row:
                     start_id = row[0]
-                    end_id   = start_id + CHUNK_SIZE - 1
-                    records_inserted.append( (start_id, end_id) )
+                    end_id   = start_id + len(chunk) - 1
+                    # records_inserted.append( (start_id, end_id) )
+
+                    # merge results
+                    if records_inserted and (start_id - 1 == records_inserted[-1][1]):
+                        # extend range:
+                        records_inserted[-1][1] = end_id
+                    else:
+                        records_inserted.append( [start_id, end_id] )
                 else:
                     print("Records couldn't be inserted on batch no.", i)
 
+        with session.begin():
+            cursor = session.connection().connection.cursor()
+            insert_query = """
+                INSERT INTO import_registry("start_id", "end_id")
+                VALUES (%s, %s)
+                RETURNING id
+            """
 
-            # with session.begin():
-            #     print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
-
-            #     statement = (SaleOrderTable.insert()
-            #                     .values(chunk)
-            #                     .returning(SaleOrderTable.c.id))
-
-
-            #     result = session.execute(statement)
-            #     row    = result.first()
-            #     if row:
-            #         start_id = row[0]
-            #         end_id   = start_id + CHUNK_SIZE - 1
-            #         records_inserted.append( (start_id, end_id) )
-            #     else:
-            #         print("Records couldn't be inserted on batch no.", i)
-
-        # for i, chunk in enumerate( batched(reader, CHUNK_SIZE) ):
-
-        #     with session.begin():
-        #         print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
-        #         for line in chunk:
-        #             order = SaleOrder(
-        #                 PointOfSale = line[0],
-        #                 Product = line[1],
-        #                 Date = line[2],
-        #                 Stock = line[3],
-        #                 )
-        #             session.add(order)
+            cursor.executemany(
+                insert_query,
+                records_inserted,
+                returning = True,
+            )
+            print('Added records the following records in the import registry')
+            for record in records_inserted:
+                print('IMPORT RANGE', record)
 
     # TODO: Use atexit module?
-    except InterruptedError as err:
+    except (InterruptedError, psycopg.Error) as err:
         print('Rolling back steps')
         for start_id, end_id in records_inserted:
             # Discard changes made on our process
             with session.begin():
-                print('Deleting:', start_id, '...', end_id)
+                print('Deleting:', start_id, '...', end_id, '(size: ', end_id - start_id + 1, 'elements)')
                 # Removing values directly
                 statement = SaleOrderTable.delete().where(
                     SaleOrderTable.c.id >= start_id,
                     SaleOrderTable.c.id <= end_id,
                 )
                 result = session.execute(statement)
+        print('Remember to vacuum your database later')
         raise

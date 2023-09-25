@@ -54,8 +54,16 @@ class SaleOrder(Base):
     Date: Mapped[date] = mapped_column()
     Stock: Mapped[int] = mapped_column()
 
+class ImportRegistry(Base):
+    __tablename__ = 'import_registry'
+    # We use ints instead of a foreign key because we are modelling
+    # a record range instead of single pointers.
+    start_id: Mapped[int] = mapped_column()
+    end_id: Mapped[int] = mapped_column()
+
 tables = [
     SaleOrder,
+    ImportRegistry,
 ]
 
 
