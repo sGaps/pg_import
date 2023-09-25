@@ -96,10 +96,13 @@ for s in (signal.SIGABRT, signal.SIGILL, signal.SIGINT, signal.SIGSEGV, signal.S
 
 
 #CHUNK_SIZE = 655_350
-CHUNK_SIZE = 10_000
+# CHUNK_SIZE = 1_000_000 # TIME: 12m 27s, RAM: 3   GiB ~ 4GiB
+# CHUNK_SIZE = 100_000   # TIME: 12m 14s, RAM: 410 MiB ~ 450MiB
+# CHUNK_SIZE = 1_000     # TIME: 13n 05s, RAM: 53  MiB ~ 53 MiB
+CHUNK_SIZE = 10_000      # TIME: 12m 06s, RAM: 93  MiB ~ 93MiB
 with stream as file, session_builder() as session:
-    # reader = csv.reader(file, delimiter = delimiter)
-    reader = csv.DictReader(file, delimiter = delimiter)
+    reader = csv.reader(file, delimiter = delimiter)
+    # reader = csv.DictReader(file, delimiter = delimiter)
 
     # NOTE: for now, we assume that we always have a header inside the csv files
     # NOTE: We can use DictReader, but it assumes that the header always have
@@ -107,7 +110,9 @@ with stream as file, session_builder() as session:
     #       utf-8 character that would lead to undefined behavior, so we must clean
     #       the names before translating these to 
     # NOTE: We could use DictReader, but it will imply a
-    print('HEADER', reader.fieldnames)
+    header = next(reader)
+    print('HEADER', header)
+    # print('HEADER', reader.fieldnames)
 
     # TODO: REMOVE PREVIOUSLY INSERTED RECORDS.
 
@@ -118,26 +123,65 @@ with stream as file, session_builder() as session:
     import time
 
     try:
-        # for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
-        for i, chunk in enumerate( batched(reader, CHUNK_SIZE) ):
+        for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
             with session.begin():
                 print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
+                # NOTE: usage of raw psycopg for efficiency
+                cursor = session.connection().connection.cursor()
 
-                statement = (SaleOrderTable.insert()
-                                .values(chunk)
-                                .returning(SaleOrderTable.c.id))
+                insert_query = """
+                    INSERT INTO sale_order("PointOfSale", "Product", "Date", "Stock")
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """
 
+                cursor.executemany(
+                    insert_query,
+                    chunk,
+                    returning = True,
+                )
 
-                result = session.execute(statement)
-                row    = result.first()
+                row = cursor.fetchone()
                 if row:
                     start_id = row[0]
                     end_id   = start_id + CHUNK_SIZE - 1
                     records_inserted.append( (start_id, end_id) )
                 else:
                     print("Records couldn't be inserted on batch no.", i)
+
+
+            # with session.begin():
+            #     print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
+
+            #     statement = (SaleOrderTable.insert()
+            #                     .values(chunk)
+            #                     .returning(SaleOrderTable.c.id))
+
+
+            #     result = session.execute(statement)
+            #     row    = result.first()
+            #     if row:
+            #         start_id = row[0]
+            #         end_id   = start_id + CHUNK_SIZE - 1
+            #         records_inserted.append( (start_id, end_id) )
+            #     else:
+            #         print("Records couldn't be inserted on batch no.", i)
+
+        # for i, chunk in enumerate( batched(reader, CHUNK_SIZE) ):
+
+        #     with session.begin():
+        #         print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
+        #         for line in chunk:
+        #             order = SaleOrder(
+        #                 PointOfSale = line[0],
+        #                 Product = line[1],
+        #                 Date = line[2],
+        #                 Stock = line[3],
+        #                 )
+        #             session.add(order)
+
     # TODO: Use atexit module?
-    except Exception as err:
+    except InterruptedError as err:
         print('Rolling back steps')
         for start_id, end_id in records_inserted:
             # Discard changes made on our process
