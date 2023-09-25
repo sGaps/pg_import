@@ -65,6 +65,7 @@ import sqlalchemy
 # TODO: Consider to remove or use later
 import itertools
 # SEE ALSO: https://docs.python.org/3/library/itertools.html#itertools-recipes
+# CONSIDER USE THIS INSTEAD: https://stackoverflow.com/questions/434287/how-to-iterate-over-a-list-in-chunks
 def batched(iterable, n):
     """Batch data into tuples of length n. The last batch may be shorter."""
     # batched('ABCDEFG', 3) --> ABC DEF G
@@ -164,25 +165,93 @@ with stream as file, session_builder() as session:
             with session.begin():
                 print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
                 # NOTE: usage of raw psycopg for efficiency
-                cursor = session.connection().connection.cursor()
+                cursor = psycopg.ClientCursor(session.connection().connection)
+                # cursor = session.connection().connection.cursor()
+
+                # TODO: CONSIDER USING THIS IN THE NEXT ITERATION.
+                # 
+                # -- | Inserts both in sale_order and in import_registry
+                # WITH tmp AS (INSERT INTO
+                #     sale_order("PointOfSale", "Product", "Date", "Stock")
+                # VALUES (%s, %s, %s, %s)
+                # RETURNING id)
+                # INSERT INTO 
+                #     import_registry(start_id, end_id)
+                # SELECT min(id) AS start_id, max(id) AS end_id FROM tmp
+                # RETURNING import_registry.id, import_registry.start_id, import_registry.end_id;
 
                 # We use directly
-                insert_query = """
-                    INSERT INTO sale_order("PointOfSale", "Product", "Date", "Stock")
-                    VALUES (%s, %s, %s, %s)
-                    RETURNING id
-                """
 
-                cursor.executemany(
+                # TODO: apply massive mogrify (?)
+
+                # import psycopg
+                # cursor = psycopg.ClientCursor()
+                # cursor.executemany()
+
+
+                insert_query = """
+                    WITH tmp AS (INSERT INTO
+                        sale_order("PointOfSale", "Product", "Date", "Stock")
+                    VALUES """
+                insert_query += ','.join(
+                        cursor.mogrify("(%s, %s, %s, %s)", line)
+                        for line
+                        in chunk)
+
+                insert_query += """
+                    RETURNING id)
+                    INSERT INTO 
+                        import_registry(start_id, end_id)
+                    SELECT min(tmp.id) AS start_id, max(tmp.id) AS end_id FROM tmp
+                    RETURNING import_registry.id, import_registry.start_id, import_registry.end_id;
+                """
+                
+
+
+                # # GOOD BUT BAD AT THE SAME TIME
+                # insert_query = """
+                #     WITH tmp AS (INSERT INTO
+                #         sale_order("PointOfSale", "Product", "Date", "Stock")
+                #     VALUES (%s, %s, %s, %s)
+                #     RETURNING id)
+                #     INSERT INTO 
+                #         import_registry(start_id, end_id)
+                #     SELECT min(tmp.id) AS start_id, max(tmp.id) AS end_id FROM tmp
+                #     RETURNING import_registry.id, import_registry.start_id, import_registry.end_id;
+                # """
+
+                # insert_query = """
+                #     INSERT INTO
+                #         sale_order("PointOfSale", "Product", "Date", "Stock")
+                #     VALUES (%s, %s, %s, %s)
+                #     RETURNING id
+                # """
+
+                # insert_query = """
+                #     INSERT INTO sale_order("PointOfSale", "Product", "Date", "Stock")
+                #     VALUES (%s, %s, %s, %s)
+                #     RETURNING id
+                # """
+
+                # cursor.executemany(
+                #     insert_query,
+                #     chunk,
+                #     returning = True,
+                # )
+
+                cursor.execute(
                     insert_query,
-                    chunk,
-                    returning = True,
                 )
+
 
                 row = cursor.fetchone()
                 if row:
-                    start_id = row[0]
-                    end_id   = start_id + len(chunk) - 1
+                    # id = row[0]
+                    # start_id = row[1]
+                    # end_id = row[2]
+                    start_id = row[1]
+                    end_id = row[2]
+                    # end_id   = start_id + len(chunk) - 1
                     # records_inserted.append( (start_id, end_id) )
 
                     # merge results
@@ -194,22 +263,22 @@ with stream as file, session_builder() as session:
                 else:
                     print("Records couldn't be inserted on batch no.", i)
 
-        with session.begin():
-            cursor = session.connection().connection.cursor()
-            insert_query = """
-                INSERT INTO import_registry("start_id", "end_id")
-                VALUES (%s, %s)
-                RETURNING id
-            """
+        # with session.begin():
+        #     cursor = session.connection().connection.cursor()
+        #     insert_query = """
+        #         INSERT INTO import_registry("start_id", "end_id")
+        #         VALUES (%s, %s)
+        #         RETURNING id
+        #     """
 
-            cursor.executemany(
-                insert_query,
-                records_inserted,
-                returning = True,
-            )
-            print('Added records the following records in the import registry')
-            for record in records_inserted:
-                print('IMPORT RANGE', record)
+        #     cursor.executemany(
+        #         insert_query,
+        #         records_inserted,
+        #         returning = True,
+        #     )
+        #     print('Added records the following records in the import registry')
+        #     for record in records_inserted:
+        #         print('IMPORT RANGE', record)
 
     # TODO: Use atexit module?
     except (InterruptedError, psycopg.Error) as err:

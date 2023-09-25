@@ -5,7 +5,9 @@ db_path   = os.path.join('credentials', staging, '.postgres.db')
 psw_path  = os.path.join('credentials', staging, '.postgres.psw')
 user_path = os.path.join('credentials', staging, '.postgres.user')
 host_path = os.path.join('credentials', staging, '.postgres.host')
+port_path = os.path.join('credentials', staging, '.postgres.port')
 
+# TODO: Add default value here:
 def extract_secret(path):
     with open(path) as file:
         return file.read()
@@ -15,6 +17,7 @@ db   = extract_secret(db_path)
 psw  = extract_secret(psw_path)
 user = extract_secret(user_path)
 host = extract_secret(host_path)
+port = extract_secret(port_path)
 
 import psycopg
 import sqlalchemy
@@ -30,6 +33,7 @@ url = sqlalchemy.URL.create(
     username   = user,
     password   = psw,
     host       = host,
+    port       = port,
     database   = db,
 )
 
