@@ -1,4 +1,14 @@
 import os
+import psycopg
+import sqlalchemy
+import logging
+
+logging.basicConfig(
+    format='[%(process)d] %(levelname)s %(filename)s: %(message)s',
+    level = logging.DEBUG)
+
+_logger = logging.getLogger(__name__)
+
 
 staging   = 'dev'
 db_path   = os.path.join('credentials', staging, '.postgres.db')
@@ -7,28 +17,21 @@ user_path = os.path.join('credentials', staging, '.postgres.user')
 host_path = os.path.join('credentials', staging, '.postgres.host')
 port_path = os.path.join('credentials', staging, '.postgres.port')
 
-# TODO: Add default value here:
-def extract_secret(path):
-    with open(path) as file:
-        return file.read()
+
+def extract_secret(path, default = ''):
+    try:
+        with open(path) as file:
+            return file.read()
+    except FileNotFoundError:
+        return default
 
 
-db   = extract_secret(db_path)
-psw  = extract_secret(psw_path)
-user = extract_secret(user_path)
-host = extract_secret(host_path)
-port = extract_secret(port_path)
-
-import psycopg
-import sqlalchemy
-import logging
-
-logging.basicConfig(level = logging.DEBUG)
-_logger = logging.getLogger(__name__)
-
-
-#url = sqlalchemy.make_url(f'postgresql+psycopg://{user}:{psw}@{host}/{db}')
-url = sqlalchemy.URL.create(
+db   = extract_secret(db_path   , 'postgres')
+psw  = extract_secret(psw_path  , 'psw')
+user = extract_secret(user_path , 'admin')
+host = extract_secret(host_path , 'localhost')
+port = extract_secret(port_path , '5432')
+url  = sqlalchemy.URL.create(
     drivername = 'postgresql+psycopg',
     username   = user,
     password   = psw,
@@ -36,10 +39,6 @@ url = sqlalchemy.URL.create(
     port       = port,
     database   = db,
 )
-
-
-# def dump(sql, *multiparams, **params):
-#     _logger.info(sql.compile(dialect=engine.dialect))
 
 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
