@@ -79,7 +79,6 @@ def unsafe_delete_import_range(session, to_delete):
 # TODO: pass import_range.
 # TODO: Remove external dependency of current_import_range
 def unsafe_import_records(session, chunk, ranges_inserted):
-    _logger.info(f'Starting batch no. {i} (SENT: {i * CHUNK_SIZE} VALUES)')
     # NOTE: usage of raw psycopg for efficiency
     cursor = psycopg.ClientCursor(session.connection().connection)
 
@@ -128,36 +127,40 @@ def unsafe_import_records(session, chunk, ranges_inserted):
         _logger.warning("Records couldn't be inserted on batch no.", i)
 
 
-parser = cli_parser()
-args   = parser.parse_args()
+def main():
+    parser = cli_parser()
+    args   = parser.parse_args()
 
-stream    = manage_input(args.input)
-delimiter = args.delimiter
+    stream    = manage_input(args.input)
+    delimiter = args.delimiter
 
-with stream as file, session_builder() as session:
-    reader = csv.reader(file, delimiter = delimiter)
-    # reader = csv.DictReader(file, delimiter = delimiter)
+    with stream as file, session_builder() as session:
+        reader = csv.reader(file, delimiter = delimiter)
+        # reader = csv.DictReader(file, delimiter = delimiter)
 
-    # NOTE: for now, we assume that we always have a header inside the csv files
-    # NOTE: We can use DictReader, but it assumes that the header always have
-    #       well written names, but in our case, the first column name has an invisible
-    #       utf-8 character that would lead to undefined behavior, so we must clean
-    #       the names before translating these to 
-    # NOTE: We could use DictReader, but it will imply a
-    header = next(reader)
-    _logger.info(f'Retrieved Header: {header}')
+        # NOTE: for now, we assume that we always have a header inside the csv files
+        # NOTE: We can use DictReader, but it assumes that the header always have
+        #       well written names, but in our case, the first column name has an invisible
+        #       utf-8 character that would lead to undefined behavior, so we must clean
+        #       the names before translating these to 
+        # NOTE: We could use DictReader, but it will imply a
+        header = next(reader)
+        _logger.info(f'Retrieved Header: {header}')
 
-    with session.begin():
-        preliminar_delete_import_range(session)
-
-    ranges_inserted = [] 
-    try:
-        attach_signals()
-        for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
-            with session.begin():
-                unsafe_import_records(session, chunk, ranges_inserted)
-        _logger.info('Import process complete!')
-    except (InterruptedError, psycopg.Error) as err:
         with session.begin():
-            rollback_import(session, ranges_inserted)
-        raise
+            preliminar_delete_import_range(session)
+
+        ranges_inserted = [] 
+        try:
+            attach_signals()
+            for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
+                with session.begin():
+                    _logger.info(f'Starting batch no. {i} (SENT: {i * CHUNK_SIZE} VALUES)')
+                    unsafe_import_records(session, chunk, ranges_inserted)
+            _logger.info('Import process complete!')
+        except (InterruptedError, psycopg.Error) as err:
+            with session.begin():
+                rollback_import(session, ranges_inserted)
+            raise
+
+main()
