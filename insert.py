@@ -100,7 +100,8 @@ for s in (signal.SIGABRT, signal.SIGILL, signal.SIGINT, signal.SIGSEGV, signal.S
 # CHUNK_SIZE = 1_000_000 # TIME: 12m 27s, RAM: 3   GiB ~ 4GiB
 # CHUNK_SIZE = 100_000   # TIME: 12m 14s, RAM: 410 MiB ~ 450MiB
 # CHUNK_SIZE = 1_000     # TIME: 13n 05s, RAM: 53  MiB ~ 53 MiB
-CHUNK_SIZE = 10_000      # TIME: 12m 06s, RAM: 93  MiB ~ 93MiB
+CHUNK_SIZE = 10_000      # TIME: 12m 06s, RAM: 93  MiB ~ 93MiB (OPTIMAL)
+# CHUNK_SIZE = 5      # TIME: 12m 06s, RAM: 93  MiB ~ 93MiB
 with stream as file, session_builder() as session:
     reader = csv.reader(file, delimiter = delimiter)
     # reader = csv.DictReader(file, delimiter = delimiter)
@@ -115,129 +116,110 @@ with stream as file, session_builder() as session:
     print('HEADER', header)
     # print('HEADER', reader.fieldnames)
 
-    # TODO: REMOVE PREVIOUSLY INSERTED RECORDS.
 
     records_inserted = []
 
     SaleOrderTable = SaleOrder.__table__
+    ImportRegistryTable = ImportRegistry.__table__
 
+    #TODO VERIFY LATER
     # with session.begin():
-    #     ImportRegistryTable = ImportRegistry.__table__
+    #     cursor = session.connection().connection.cursor()
     #     delete_query = """
-    #         DELETE FROM sale_order
-    #         WHERE id IN (
-    #             SELECT
-    #                 "start_id",
-    #                 "end_id"
+    #         -- | Remove the previous imports
+    #         DELETE FROM sale_order so_del
+    #             WHERE so_del.id IN (
+    #                 SELECT
+    #                     so.id
+    #                 FROM
+    #                     sale_order so
+    #                     JOIN import_registry ir
+    #                         ON (so.id >= ir.start_id AND so.id <= ir.end_id)
+    #                 GROUP BY so.id);
+
+    #         -- | Cleans the import registry
+    #         DELETE FROM import_registry;
+    #         """
+    #     cursor.execute(delete_query)
+
+    with session.begin():
+        to_delete = session.scalars(sqlalchemy.select(ImportRegistry).order_by(ImportRegistry.id))
+        cursor    = psycopg.ClientCursor(session.connection().connection)
+        for i, chunk_to_delete in enumerate( batched(to_delete, CHUNK_SIZE) ):
+            print('Deleting batch no.', i, '(DELETED:', i * CHUNK_SIZE, 'VALUES)')
+
+            delete_query = "DELETE FROM sale_order WHERE "
+
+            delete_template = 'id >= %s AND id <= %s\n'
+
+            delete_query += ' OR '.join(
+                    cursor.mogrify(delete_template, [record.start_id, record.end_id])
+                    for record
+                    in chunk_to_delete)
+
+            cursor.execute(
+                delete_query,
+            )
+
+        # PRUNE table
+        # TODO: Consider trucate to deallocate the space to the OS:
+        session.execute(sqlalchemy.delete(ImportRegistry))
+
+        print('Delted a lot of records')
+
+
+
+    # # TODO: IMPROVE. TOO SLOW
+    # with session.begin():
+    #     to_delete = session.scalars(sqlalchemy.select(ImportRegistry).order_by(ImportRegistry.id))
+    #     deletion_ranges = []
+    #     for record in to_delete:
+    #         deletion_ranges.append(
+    #             sqlalchemy.and_(
+    #                 SaleOrder.id >= record.start_id,
+    #                 SaleOrder.id <= record.end_id
+    #             )
     #         )
-    #     """
-    #     sqlalchemy.select(
-    #         ImportRegistryTable.c.start_id,
-    #         ImportRegistryTable.c.end_id,
-    #     ).select_from(
-    #         S
+    #     statement = sqlalchemy.delete(SaleOrder).where(
+    #         sqlalchemy.or_(
+    #             sqlalchemy.false(),
+    #             *deletion_ranges
+    #         )
     #     )
 
-    #     ImportRegistryTable.c.start_id
-    #     ImportRegistryTable.c.end_id
-    #     pass
-    with session.begin():
-        cursor = session.connection().connection.cursor()
-        delete_query = """
-            -- | Remove the previous imports
-            DELETE FROM sale_order so_del
-                WHERE so_del.id IN (
-                    SELECT
-                        so.id
-                    FROM
-                        sale_order so
-                        JOIN import_registry ir
-                            ON (so.id >= ir.start_id AND so.id <= ir.end_id)
-                    GROUP BY so.id);
+    #     print('Deleting records')
+    #     result = session.execute(statement)
+    #     print('Deleted a lot of records on SaleOrder', result.rowcount)
+    #     # TODO: Delete all records inside ImportRegistry
 
-            -- | Cleans the import registry
-            DELETE FROM import_registry;
-            """
-        cursor.execute(delete_query)
 
     try:
+        # TODO:Enable signals in this try/except block:
+
+        current_import_range = None
+        ranges = [] 
         for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
             with session.begin():
                 print('Starting batch no.', i, '(SENT:', i * CHUNK_SIZE, 'VALUES)')
                 # NOTE: usage of raw psycopg for efficiency
                 cursor = psycopg.ClientCursor(session.connection().connection)
-                # cursor = session.connection().connection.cursor()
-
-                # TODO: CONSIDER USING THIS IN THE NEXT ITERATION.
-                # 
-                # -- | Inserts both in sale_order and in import_registry
-                # WITH tmp AS (INSERT INTO
-                #     sale_order("PointOfSale", "Product", "Date", "Stock")
-                # VALUES (%s, %s, %s, %s)
-                # RETURNING id)
-                # INSERT INTO 
-                #     import_registry(start_id, end_id)
-                # SELECT min(id) AS start_id, max(id) AS end_id FROM tmp
-                # RETURNING import_registry.id, import_registry.start_id, import_registry.end_id;
-
-                # We use directly
-
-                # TODO: apply massive mogrify (?)
-
-                # import psycopg
-                # cursor = psycopg.ClientCursor()
-                # cursor.executemany()
-
 
                 insert_query = """
                     WITH tmp AS (INSERT INTO
                         sale_order("PointOfSale", "Product", "Date", "Stock")
                     VALUES """
+
+                insert_template = "(%s, %s, %s, %s)"
+
                 insert_query += ','.join(
-                        cursor.mogrify("(%s, %s, %s, %s)", line)
+                        cursor.mogrify(insert_template, line)
                         for line
                         in chunk)
 
                 insert_query += """
                     RETURNING id)
-                    INSERT INTO 
-                        import_registry(start_id, end_id)
-                    SELECT min(tmp.id) AS start_id, max(tmp.id) AS end_id FROM tmp
-                    RETURNING import_registry.id, import_registry.start_id, import_registry.end_id;
+                    SELECT min(tmp.id) AS start_id, max(tmp.id) AS end_id FROM tmp;
                 """
-                
-
-
-                # # GOOD BUT BAD AT THE SAME TIME
-                # insert_query = """
-                #     WITH tmp AS (INSERT INTO
-                #         sale_order("PointOfSale", "Product", "Date", "Stock")
-                #     VALUES (%s, %s, %s, %s)
-                #     RETURNING id)
-                #     INSERT INTO 
-                #         import_registry(start_id, end_id)
-                #     SELECT min(tmp.id) AS start_id, max(tmp.id) AS end_id FROM tmp
-                #     RETURNING import_registry.id, import_registry.start_id, import_registry.end_id;
-                # """
-
-                # insert_query = """
-                #     INSERT INTO
-                #         sale_order("PointOfSale", "Product", "Date", "Stock")
-                #     VALUES (%s, %s, %s, %s)
-                #     RETURNING id
-                # """
-
-                # insert_query = """
-                #     INSERT INTO sale_order("PointOfSale", "Product", "Date", "Stock")
-                #     VALUES (%s, %s, %s, %s)
-                #     RETURNING id
-                # """
-
-                # cursor.executemany(
-                #     insert_query,
-                #     chunk,
-                #     returning = True,
-                # )
 
                 cursor.execute(
                     insert_query,
@@ -246,14 +228,24 @@ with stream as file, session_builder() as session:
 
                 row = cursor.fetchone()
                 if row:
-                    # id = row[0]
-                    # start_id = row[1]
-                    # end_id = row[2]
-                    start_id = row[1]
-                    end_id = row[2]
-                    # end_id   = start_id + len(chunk) - 1
-                    # records_inserted.append( (start_id, end_id) )
+                    start_id = row[0]
+                    end_id = row[1]
 
+                    if (current_import_range and start_id == current_import_range.end_id + 1):
+                        # WE ARE STILL IN THE SAME RANGE, SO WE CAN JOIN THEM IN PLACE
+                        current_import_range.end_id = end_id
+                    else:
+                        # we register a new range into our range pool because it is the
+                        # first range one we are building or because we encountered a non-
+                        # perfectly consecutive range, meaning that another process inserted
+                        # data in the table.
+                        current_import_range = ImportRegistry(
+                            start_id = start_id,
+                            end_id = end_id)
+                        session.add(current_import_range)
+                        ranges.append(current_import_range)
+
+                    # TODO: DELETE THIS SECTION BECAUSE IT IS DEPRECATED:
                     # merge results
                     if records_inserted and (start_id - 1 == records_inserted[-1][1]):
                         # extend range:
@@ -263,24 +255,6 @@ with stream as file, session_builder() as session:
                 else:
                     print("Records couldn't be inserted on batch no.", i)
 
-        # with session.begin():
-        #     cursor = session.connection().connection.cursor()
-        #     insert_query = """
-        #         INSERT INTO import_registry("start_id", "end_id")
-        #         VALUES (%s, %s)
-        #         RETURNING id
-        #     """
-
-        #     cursor.executemany(
-        #         insert_query,
-        #         records_inserted,
-        #         returning = True,
-        #     )
-        #     print('Added records the following records in the import registry')
-        #     for record in records_inserted:
-        #         print('IMPORT RANGE', record)
-
-    # TODO: Use atexit module?
     except (InterruptedError, psycopg.Error) as err:
         print('Rolling back steps')
         for start_id, end_id in records_inserted:
@@ -295,3 +269,5 @@ with stream as file, session_builder() as session:
                 result = session.execute(statement)
         print('Remember to vacuum your database later')
         raise
+
+    print(current_import_range)
