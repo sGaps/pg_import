@@ -1,11 +1,9 @@
-import argparse
 import sys
 import os
 import io
 import signal
 
 from contextlib import contextmanager
-
 
 @contextmanager
 def manage_input(path = None):
@@ -22,24 +20,7 @@ def manage_input(path = None):
         istream = io.TextIOWrapper(sys.stdin.buffer, encoding = 'utf-8-sig')
         yield istream
 
-def cli_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-i',
-        '--input',
-        metavar = '<file>',
-        dest = 'input',
-        help = 'Indicates which file will be read by this command. stdin used when not provided',
-    )
-    parser.add_argument(
-        '-d',
-        '--delimiter',
-        metavar = '<char>',
-        dest    = 'delimiter',
-        default = ';',
-        help = 'indicates which column delimiter will be used to read the csv input',
-    )
-    return parser
+
 
 def attach_signals():
     def signal_handler(sig, frame):

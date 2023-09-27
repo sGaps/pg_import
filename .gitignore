@@ -5,3 +5,4 @@ data/
 credentials/
 logs/
 *__pycache__*
+poetry.lock

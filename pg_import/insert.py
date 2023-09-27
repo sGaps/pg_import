@@ -1,26 +1,17 @@
-# INPUT
-#   a csv file or stdin (they only need csv file really).
-#       This file has rows that must be inserted into a local
-#       PostgreSQL database
-
-# take the rows and insert it into the database.
-# NOTE: you must remove the content from a possible previous import.
-
-# Delivery method:
-#   Put the code in a public Github Repository.
-
 import csv
 from itertools import islice
 
 import psycopg
 import sqlalchemy
 
-from db import session_builder, SaleOrder, ImportRegistry
-from cli import cli_parser, manage_input, attach_signals
+from .io import manage_input, attach_signals
+from .db import session_builder, ImportRegistry
+from .cli import cli_parser
 
 import logging
 _logger = logging.getLogger(__name__)
 
+# TODO: Move to config?
 # CHUNK_SIZE = 1_000_000 # TIME: 12m 27s, RAM: 3   GiB ~ 4GiB
 # CHUNK_SIZE = 100_000   # TIME: 12m 14s, RAM: 410 MiB ~ 450MiB
 # CHUNK_SIZE = 1_000     # TIME: 13n 05s, RAM: 53  MiB ~ 53 MiB
@@ -37,17 +28,16 @@ def batched(iterable, n):
     while batch := tuple(islice(it, n)):
         yield batch
 
-def preliminar_delete_import_range(session):
+
+def unsafe_preliminar_delete_import_range(session):
     to_delete = session.scalars(sqlalchemy.select(ImportRegistry).order_by(ImportRegistry.id))
-    #with session.begin_nested():
     unsafe_delete_import_range(session, to_delete)
     session.execute(sqlalchemy.delete(ImportRegistry))
 
     _logger.info('COMPLETED DELETION PROCESS')
 
 
-def rollback_import(session, to_delete):
-    # with session.begin_nested():
+def unsafe_rollback_import(session, to_delete):
     unsafe_delete_import_range(session, to_delete)
     for record in to_delete:
         _logger.info(f"Deleting: {record.start_id} ... {record.end_id} (size: {record.end_id - record.start_id + 1} elements)")
@@ -124,7 +114,7 @@ def unsafe_import_records(session, chunk, ranges_inserted):
             session.add(current_import_range)
             ranges_inserted.append(current_import_range)
     else:
-        _logger.warning("Records couldn't be inserted on batch no.", i)
+        _logger.warning("Unable to insert the current batch")
 
 
 def main():
@@ -138,19 +128,19 @@ def main():
         reader = csv.reader(file, delimiter = delimiter)
         # reader = csv.DictReader(file, delimiter = delimiter)
 
-        # NOTE: for now, we assume that we always have a header inside the csv files
-        # NOTE: We can use DictReader, but it assumes that the header always have
-        #       well written names, but in our case, the first column name has an invisible
-        #       utf-8 character that would lead to undefined behavior, so we must clean
-        #       the names before translating these to 
-        # NOTE: We could use DictReader, but it will imply a
+        # NOTE: We avoid using the DictReader because it will impact
+        #       the performance negatively. In our case, it's better
+        #       to manage the records as tuples or lists instead.
         header = next(reader)
         _logger.info(f'Retrieved Header: {header}')
 
         with session.begin():
-            preliminar_delete_import_range(session)
+            unsafe_preliminar_delete_import_range(session)
 
+        # Collects the values currently inserted so we can apply a manual
+        # rollback if the user cancels/close this process.
         ranges_inserted = [] 
+
         try:
             attach_signals()
             for i, chunk in enumerate(batched(reader, CHUNK_SIZE)):
@@ -158,9 +148,7 @@ def main():
                     _logger.info(f'Starting batch no. {i} (SENT: {i * CHUNK_SIZE} VALUES)')
                     unsafe_import_records(session, chunk, ranges_inserted)
             _logger.info('Import process complete!')
-        except (InterruptedError, psycopg.Error) as err:
+        except (InterruptedError, psycopg.Error):
             with session.begin():
-                rollback_import(session, ranges_inserted)
+                unsafe_rollback_import(session, ranges_inserted)
             raise
-
-main()
