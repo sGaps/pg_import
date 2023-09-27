@@ -3,7 +3,6 @@
 
 ## Table of Contents
 
-  - [Table of Contents](#table-of-contents)
   - [About](#about)
   - [Quick Setup](#quick-setup)
   - [How to use](#how-to-use)
@@ -58,7 +57,7 @@ or using the script utility:
 python3 run_import.py -i <path/to/file.csv>
 ```
 
-Note that you can cancel the process by pressing `Ctrl+C` in the terminal o sending a `SIGTERM` to the process. Before exiting, the program will delete all records it has inserted. If you press `Ctrl+C` before the rollback process ends, you will be able to preserve the changes made in the db. (but sometimes, the rollback will be so fast that you won't be able to cancel it).
+Note that you can cancel the process by pressing `Ctrl+C` in the terminal or sending a `SIGTERM` to the process. Before exiting, the program will delete all records it has inserted. If you press `Ctrl+C` before the rollback process ends, you will be able to preserve the changes made in the db. (but sometimes, the rollback will be so fast that you won't be able to cancel it).
 
 Also, you may be interested in seeing some addditional [examples](#examples).
 
