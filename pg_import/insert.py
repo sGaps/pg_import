@@ -11,18 +11,24 @@ from .cli import cli_parser
 import logging
 _logger = logging.getLogger(__name__)
 
-# TODO: Move to config?
-# TODO: Update measurements
-# CHUNK_SIZE = 1_000_000 # TIME: 12m 27s, RAM: 3   GiB ~ 4GiB
-# CHUNK_SIZE = 100_000   # TIME: 12m 14s, RAM: 410 MiB ~ 450MiB
-# CHUNK_SIZE = 1_000     # TIME: 13n 05s, RAM: 53  MiB ~ 53 MiB
-# CHUNK_SIZE = 5         # TIME: <TESTING METHOD>
-CHUNK_SIZE = 10_000      # TIME: 12m 06s, RAM: 93  MiB ~ 93MiB (OPTIMAL)
+# BENCHMARKS || [HARDWARE] CPU: i5-10400, RAM: 2x8 GiB @ 2400 MT/s, SWAP: 16GiB (HDD) || [ENVIRONMENT] OS: Manjaro 23.0 , Kernel: 5.15.131-1 | KDE Plasma
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------
+# CHUNK_SIZE = 1_000_000    # TIME: 08m 53s ~ ???????, RAM: 583 MiB ~ 002 GiB. CPU <python>: 100%. CPU <system>: 20% (max), 10% (min). (<< TOO MANY RESOURCES)
+# CHUNK_SIZE = 100_000      # TIME: 08m 33s ~ 08m 55s, RAM: 410 MiB ~ 680 MiB. CPU <python>: 100%. CPU <system>: 21% (max), 11% (min).
+# CHUNK_SIZE = 10_000       # TIME: 08m 30s ~ 08m 53s, RAM: 093 MiB ~ 150 MiB. CPU <python>: 075%. CPU <system>: 17% (max), 11% (min). (<< OPTIMAL)
+# CHUNK_SIZE = 1_000        # TIME: 10m 55s ~ 11m 03s, RAM: 053 MiB ~ 069 MiB. CPU <python>: 070%. CPU <system>: 17% (max), 11% (min).
 
-# SEE ALSO: https://docs.python.org/3/library/itertools.html#itertools-recipes
+# OPTIMAL CHUNK SIZE:
+CHUNK_SIZE = 10_000
+
 def batched(iterable, n):
-    """Batch data into tuples of length n. The last batch may be shorter."""
-    # batched('ABCDEFG', 3) --> ABC DEF G
+    """
+        Batch data into tuples of length n.
+        The last batch may be shorter.
+            batched('ABCDEFG', 3) --> ABC DEF G
+
+        SEE ALSO: https://docs.python.org/3/library/itertools.html#itertools-recipes
+    """
     if n < 1:
         raise ValueError('n must be at least one')
     it = iter(iterable)
@@ -31,6 +37,10 @@ def batched(iterable, n):
 
 
 def unsafe_preliminar_delete_import_range(session):
+    """
+        Deletes the previously imported records and their
+        corresponding import range registry from the db.
+    """
     to_delete = session.scalars(sqlalchemy.select(ImportRegistry).order_by(ImportRegistry.id))
     unsafe_delete_import_range(session, to_delete)
     session.execute(sqlalchemy.delete(ImportRegistry))
@@ -39,6 +49,16 @@ def unsafe_preliminar_delete_import_range(session):
 
 
 def unsafe_rollback_import(session, to_delete):
+    """
+        Deletes the imported records added by this program
+        and their corresponding import range registry.
+
+        to_delete: [ImportRegistry]
+            sequence of import ranges that marks which
+            records must be deleted in SaleOrder. once
+            the orders are deleted, each record inside
+            to_delete is removed from the db as well.
+    """
     unsafe_delete_import_range(session, to_delete)
     for record in to_delete:
         _logger.info(f"Deleting: {record.start_id} ... {record.end_id} (size: {record.end_id - record.start_id + 1} elements)")
@@ -48,6 +68,14 @@ def unsafe_rollback_import(session, to_delete):
 
 
 def unsafe_delete_import_range(session, to_delete):
+    """
+        Deletes the imported records marked by each range
+        inside to_delete.
+
+        to_delete: [ImportRegistry]
+            sequence of import ranges that marks which
+            records must be deleted in SaleOrder.
+    """
     cursor = psycopg.ClientCursor(session.connection().connection)
 
     for i, chunk_to_delete in enumerate( batched(to_delete, CHUNK_SIZE) ):
@@ -67,9 +95,30 @@ def unsafe_delete_import_range(session, to_delete):
         )
 
 
-# TODO: pass import_range.
-# TODO: Remove external dependency of current_import_range
 def unsafe_import_records(session, chunk, ranges_inserted):
+    """
+        Inserts a new chunk of records into the database
+        and also register the chunk of ids into the import
+        registry.
+
+        ranges_inserted: [ImportRegistry]
+            list of cached ImportRegistry instances used to determine if
+            we must merge the current import range or if we should create
+            a new import range.
+            
+        A new import range is created if the current and previous
+        range are not mergeable. Two ranges are mergeable if their
+        union describes a continuous sequence, for example:
+
+            let a = [1, 10] and, b = [11, 23]
+            both a and b are mergeable because if we mix them,
+            the result will be: [1, 23]
+
+            in the other hand, if c = [26, 30], then
+            b and c are not mergeable because if we join their
+            ranges, the result will be:
+                [11, 23] <hole of size 2> [26, 30]
+    """
     # NOTE: usage of raw psycopg for efficiency
     cursor = psycopg.ClientCursor(session.connection().connection)
 
@@ -122,6 +171,9 @@ def unsafe_import_records(session, chunk, ranges_inserted):
 
 
 def main():
+    """
+        main routine. Coordinates all the concepts and ideas into a single function.
+    """
     parser = cli_parser()
     args   = parser.parse_args()
 

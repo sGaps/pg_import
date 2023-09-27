@@ -1,3 +1,8 @@
+"""
+    Implements the CLI interface.
+
+    To see the available options, invoke the program with the parameter -h or --help
+"""
 import argparse
 
 def cli_parser():
