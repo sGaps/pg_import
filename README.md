@@ -128,20 +128,20 @@ the connection works fine. Later, I saw that I needed to define an initial schem
 the package `sqlalchemy` to help me define the tables/models the program requires by using
 the declarative interface and ORM that this component provides.
 
+With both packages included in the project, I made some simple scritps that implenented a brute force solution, which consisted on uploading all records at once. The purpose of this approach was exploring how many resources the program needs to process the whole sample.
 
-Secondly, I needed to devise a way to connect to the database. So I decided to use `psycopg` because I already have experience with its older version `psycopg2` and also, because it's widely used for projects that involves PostgreSQL databases. After that, I had to create a simple module to connect to the testing database, and a way to create tables easily. So I chose `SqlAlchemy` to help me to define models and perform ORM operations quickly.
+After almost running out of memory, I canceled the process and saw that It could upload 6.9M of records by using 7GiB of RAM. Knowning the limitations the brute force approach had, I realized that a huge improvement was needed in order to come up with a real solution, so I started analyzig what's went wrong.
 
-Then, I started to create a simple brute force solution to upload all the records from
-the input sample, which had +17M records in it. After almost running out of memory, I canceled the process and saw that I only could upload 6.9M of records from python by using 7GiB of RAM.
+The first thing I detected was that the original scripts were creating ORM records in memory and saving them in the session pool. Each time we created a new record, the memory usage of the session were increasing as well until reaching the point that the program couldn't allocate more memory. With that in mind, we could just divide the sample into chunks and send them to the database.
 
-Knowning the limitations that the brute force approach had, I realized that I had to improve
-the solution with several techniques that will be discussed below.
+To support this solution proposal, I designed an incremental import processing, where The programs loads chunks of 100k records and commiting the changes after that. But as I was still using the ORM, it took around 18 minutes and 4GiB of RAM to complete the process.
 
-The original solution consisted in using the ORM provided by sqlalchemy and add each record in the session pool, which will increase the memory usage of the program if we do not flush nor commit the results frequently. So I knew that I had to split up the sample into several chunks.
+Having a minimal working program, I decided to implement a simple but useful CLI interface to make easier performing the tests. During this step, I thought that `pg_import` needed to be composable, so it should be able to read from stdin, and as it was accepting csv files, it also needed a way to specify the column delimiters used in the input. The right tool to create a simple cli was the module `argparse`, which is much simpler than the `getopts` alternative.
 
-But before diving into the hard problem, I decided to move forward to give the program a better interface so that I could run the tests easier. In that sense, I used argparse to create a simple CLI and so, manage the input and delimiter in a much better way (I also could compose my program with some shell utilities thanks to the CLI interface).
+This new version
+[TODO CONTINUE]
 
-Coming back to the harder problem, I had to see how to split up the data, and also, started to perform some tests over the sizes of the built-in python objects and see how much memory they take when we are using a massive amounts of them.
+comming back to the harder problem, I had to see how to split up the data, and also, started to perform some tests over the sizes of the built-in python objects and see how much memory they take when we are using a massive amounts of them.
 
 After doing some refactors, and splitting the massive insertions into smaller ones, I obtained an script that took 18 minutes to import all of the data, which in my opinion was too slow. However, I had no idea of how fast postgres is able to insert/import the 17M records, so I decided to test it by using the command `\copy` that `psql` has.
 
