@@ -1,9 +1,9 @@
 
-# `pg_import`, import records into Postgres with python
+# pg_import: import csv rows to a db with python
 
 ## Table of Contents
 
-- [TLDR](#tldr)
+- [About](#about)
 - [How to use](#usage)
 - [Configuration](#configuration)
 - [Approach](#approach)
@@ -11,10 +11,14 @@
 - [Benchmarks](#benchmarks)
 - [Examples](#examples)
 
-## TLDR;
+## About
 
-TODO: Project description
+Import records from a csv input to a existing postgres database without using the instruction `COPY`.
 
+Execute the command and wait until the import process is complete:
+```bash
+python3 -m py_import -i path/to/your/file.csv
+```
 
 ## Quick Setup
 
@@ -24,106 +28,105 @@ git clone https://github.com/sGaps/pg_import.git
 ```
 
 Open the project folder
-
 ```bash
 cd pg_import
 ```
 
-If you have an existing database to test, configure the credentials files `.postgres.*` that are inside the `credentials/dev` folder, for example, you can edit the password used to connect
-to the database with the following command:
+If you have a testing database already, you may be interested in configure the credentials files `.postgres.*` that are inside the `credentials/dev` folder. For example, if you want to edit the password used to connect to the database, then you should edit the file `credentials/dev/.postgres.psw`.
 ```bash
 echo 'my-password' > credentials/dev/.postgres.psw
 ```
 
-If you don't have a running or existing database, you can create one by executing
-the `docker-compose.yml` file also included in this project.
+If you don't have any existing database, you can create a new one by executing
 ```bash
 docker compose up -d
 ```
 
+And you won't need to create the tables manually, `pg_import` will create the tables it needs to work.
+
 ## How to use
 
-After completing [Quick setup](#quick-setup), you can import some records with the module notation:
+After completing [Quick setup](#quick-setup), you can import some records using the module notation:
 ```bash
 python3 -m py_import -i <path/to/file.csv>
 ```
 
-or using the script notation:
+or using the script utility:
 ```bash
 python3 run_import.py -i <path/to/file.csv>
 ```
 
-You can cancel the process by pressing `Ctrl+C` in the terminal. Before exiting, the program will delete
-all the records it inserted. If you press `Ctrl+C` before the rollback finish, you will be able to preserve the
-changes made in the db.
+Note that you can cancel the process by pressing `Ctrl+C` in the terminal o sending a `SIGTERM` to the process. Before exiting, the program will delete all records it has inserted. If you press `Ctrl+C` before the rollback process ends, you will be able to preserve the changes made in the db. (but sometimes, the rollback will be so fast that you won't be able to cancel it).
 
 Also, you may be interested in seeing some addditional [examples](#examples).
 
 ## Configuration
 
-The connection settings must be put in a directory named `credentials/`,
-there you should create a directory called `dev` which will contain the
-configuration files of your current staging.
+This project loads its configuration from a directory named `credentials/`,
+which should contain a subfolder named `dev` which can have several files
+that defines the values used to create PostgreSQL Connections.
 
-This project was created with multiple stagings in mind, so you can have
-configurations of different stagings to manage credentials, connection
-settings, and misc. parameters as well.
-
-The directory structure that needs this program to work is the following one:
-```
-{credentials}/
-    {staging}/
-        secret01
-        secret02
-```
-
-Where the fragment `{credentials}` is a path that can be set by the
-environment variable `$PG_IMPORT_CONFIG_PATH`. It's default value is
-`credentials/`. This path must contain a folder called `{staging}`
-which can be set by the environment variable `$PG_IMPORT_STAGING`
-or by a file contained in `$PWD/.staging`.
-
-When `{stagging}` is not set, the value `dev` is assumed. The
-files that are currently loaded from the configuration
-`{credentials}/{stagging}/` are:
-    - .postgres.db
-    - .postgres.psw
-    - .postgres.user
-    - .postgres.port
-    - .postgres.host
-
-for example:
 ```
 ./
     credentials/
         dev/
             .postgres.db
-            .postgres.psw
             .postgres.user
-            .postgres.port
-            .postgres.host
-        qa/
-            .postgres.db
-            .postgres.psw
-            .postgres.user
-            .postgres.port
-            .postgres.host
-        ...
-    pg_import/
-        ...
-    ...
-    .staging
+            ...
 ```
+
+For now, it seems that it's a little weird to have a folder wth a subfolder to
+contain connection arguments. Well, it actually is!, but there's a reason for that.
+
+`pg_import` accepts a parameter named `staging`, which instructs the program to load
+a bunch of parameters from another subfolder so that you can keep all those the
+configurations in your workflow. 
+
+By default, `staging` has the value `dev`, so it can load the files inside `credentials/dev`.
+But you can specify the staging by setting the environment variable `$PG_IMPORT_STAGING` or
+also by adding a file named `.staging` in your current folder. (note that the env variable has
+precedence over the `.staging` file).
+
+```bash
+env PG_IMPORT_STAGING=qa python3 -m pg_import -i ...
+# > will load the files inside: `credentials/qa`
+```
+
+Also, you can specify the directory that holds the `staging` folders by setting the
+environment variable `PG_IMPORT_CONFIG_PATH`, which has the value `credentials` as
+default.
+
+Currently, the files that are currently loaded from the path `{credentials}/{stagging}` are:
+- `.postgres.db`
+- `.postgres.psw`
+- `.postgres.user`
+- `.postgres.port`
+- `.postgres.host`
+
 
 
 ## Approach
 
-The first thing I had to consider was to create a testing database.  In this case, I used docker compose to configure a PostgreSQL service easily, which can run with the command:
+The goal is to insert more than 17M without using the `COPY` directive that `PostgreSQL` implements, and using a program written in python to achieve it.
+
+So, the first thing I needed was a way to create a database quickly. In this case, I used
+docker compose to configure a PostgreSQL service quickly, which can be run with the command:
 ```bash
 docker compose up -d
 ```
-During that process, I created some docker secrets to manage the credentials of the database
-and created the configuration based on the directory `./credentials./` (see also [config](#configuration)).
+
+Then, I added some docker secrets to manage the credentiasl and organize it into a base
+configuration structure like the one seen in the [configuration](#configuration) section.
+
+Already having a database, the next step was to create a simple connection to the database using
+pythonm so I considered to use the package `psycopg` because it's widely used for projects that
+involves Postgres databases and python. Also, I used `psycopg2` before, so I thought it was
+good to explore a newer version of the package.
+
+After that, implemented a simple connection script to perform some queries and check whether
+the connection works fine. Later, I saw that I needed to define an initial schema so, I chose
+the package `sqlalchemy` to help me define the tables/models the program requires by using
+the declarative interface and ORM that this component provides.
 
 
 Secondly, I needed to devise a way to connect to the database. So I decided to use `psycopg` because I already have experience with its older version `psycopg2` and also, because it's widely used for projects that involves PostgreSQL databases. After that, I had to create a simple module to connect to the testing database, and a way to create tables easily. So I chose `SqlAlchemy` to help me to define models and perform ORM operations quickly.
