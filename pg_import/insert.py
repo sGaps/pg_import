@@ -19,7 +19,7 @@ _logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------
 # CHUNK_SIZE = 1_000_000    # TIME: 08m 53s ~ ???????, RAM: 583 MiB ~ 002 GiB. CPU <python>: 100%. CPU <system>: 20% (max), 10% (min). (<< TOO MANY RESOURCES)
 # CHUNK_SIZE = 100_000      # TIME: 08m 33s ~ 08m 55s, RAM: 410 MiB ~ 680 MiB. CPU <python>: 100%. CPU <system>: 21% (max), 11% (min).
-# CHUNK_SIZE = 10_000       # TIME: 08m 30s ~ 08m 53s, RAM: 093 MiB ~ 150 MiB. CPU <python>: 075%. CPU <system>: 17% (max), 11% (min). (<< OPTIMAL)
+# CHUNK_SIZE = 10_000       # TIME: 08m 30s ~ 08m 53s, RAM: 093 MiB ~ 150 MiB. CPU <python>: 079%. CPU <system>: 17% (max), 11% (min). (<< OPTIMAL)
 # CHUNK_SIZE = 1_000        # TIME: 10m 55s ~ 11m 03s, RAM: 053 MiB ~ 069 MiB. CPU <python>: 070%. CPU <system>: 17% (max), 11% (min).
 
 # OPTIMAL CHUNK SIZE:
