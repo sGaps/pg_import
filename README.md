@@ -3,13 +3,15 @@
 
 ## Table of Contents
 
-- [About](#about)
-- [How to use](#usage)
-- [Configuration](#configuration)
-- [Approach](#approach)
-- [Limitations](#limitations)
-- [Benchmarks](#benchmarks)
-- [Examples](#examples)
+  - [Table of Contents](#table-of-contents)
+  - [About](#about)
+  - [Quick Setup](#quick-setup)
+  - [How to use](#how-to-use)
+  - [Configuration](#configuration)
+  - [Approach](#approach)
+  - [Limitations](#limitations)
+  - [Benchmarks](#benchmarks)
+  - [Examples](#examples)
 
 ## About
 
@@ -107,7 +109,7 @@ Currently, the files that are currently loaded from the path `{credentials}/{sta
 
 ## Approach
 
-The goal is to insert more than 17M without using the `COPY` directive that `PostgreSQL` implements, and using a program written in python to achieve it.
+The goal was to insert more than 17M without using the `COPY` directive that `PostgreSQL` implements, and using a program written in python to achieve it.
 
 So, the first thing I needed was a way to create a database quickly. In this case, I used
 docker compose to configure a PostgreSQL service quickly, which can be run with the command:
@@ -119,16 +121,25 @@ Then, I added some docker secrets to manage the credentiasl and organize it into
 configuration structure like the one seen in the [configuration](#configuration) section.
 
 Already having a database, the next step was to create a simple connection to the database using
-pythonm so I considered to use the package `psycopg` because it's widely used for projects that
-involves Postgres databases and python. Also, I used `psycopg2` before, so I thought it was
-good to explore a newer version of the package.
+python so I considered to use the package `psycopg` because it's widely used for projects that
+involves Postgres databases. Also, I used `psycopg2` before, so I thought it was
+good to experiment with a newer version of that package.
 
 After that, implemented a simple connection script to perform some queries and check whether
 the connection works fine. Later, I saw that I needed to define an initial schema so, I chose
 the package `sqlalchemy` to help me define the tables/models the program requires by using
 the declarative interface and ORM that this component provides.
 
-With both packages included in the project, I made some simple scritps that implenented a brute force solution, which consisted on uploading all records at once. The purpose of this approach was exploring how many resources the program needs to process the whole sample.
+Later, I designed the schema with two models: `SaleOrder` (indexed) which holds the data that we are trying to import and `ImportRegistry`, that keep the track of the records that were imported in `SaleOrder`. But why not to just add a simple `Boolean` to mark the records that were imported?
+
+> Well, It could have work for this simple example
+
+But if we tried to move this solution to a general case, we could have some problems with the existing database tables. To implement the `Boolean` solution, we need to add this field to every table that will implement an import scheme. This implies that we have to choose a name that doesn't cause any conflict with the existing columns of all tables, which is hard.
+
+But having a separate table that tracks every import, we could just add a new attribute in this model that holds the name of a table where an import process has been performed. And as we know that we only import massive amounts of data, I decided to have the records `start_id` and
+`end_id` to represent import ranges.
+
+Having the schema and both packages included in the project, I made some simple scritps that implemented a brute force solution, which consisted on uploading all records at once. The purpose of this approach was exploring how many resources the program needs to process the whole sample.
 
 After almost running out of memory, I canceled the process and saw that It could upload 6.9M of records by using 7GiB of RAM. Knowning the limitations the brute force approach had, I realized that a huge improvement was needed in order to come up with a real solution, so I started analyzig what's went wrong.
 
@@ -138,24 +149,30 @@ To support this solution proposal, I designed an incremental import processing, 
 
 Having a minimal working program, I decided to implement a simple but useful CLI interface to make easier performing the tests. During this step, I thought that `pg_import` needed to be composable, so it should be able to read from stdin, and as it was accepting csv files, it also needed a way to specify the column delimiters used in the input. The right tool to create a simple cli was the module `argparse`, which is much simpler than the `getopts` alternative.
 
-This new version
-[TODO CONTINUE]
+Comming back to the harder problem, I performed an import test with the command `psql` and its built-in instruction `\copy` to see how fast it can load the sample of 17M records. The test took 1 minute and few seconds. It seems that `COPY` uses a large set of optimizations to ensure that the data will be available as soon as possible.
 
-comming back to the harder problem, I had to see how to split up the data, and also, started to perform some tests over the sizes of the built-in python objects and see how much memory they take when we are using a massive amounts of them.
+Knowing that the challenge is to avoid using this bulk-insert operation, I needed to follow some additional strategies to provide a efficient and scalable solution.
 
-After doing some refactors, and splitting the massive insertions into smaller ones, I obtained an script that took 18 minutes to import all of the data, which in my opinion was too slow. However, I had no idea of how fast postgres is able to insert/import the 17M records, so I decided to test it by using the command `\copy` that `psql` has.
+I decided to drop the fragment of code that relied on the SQLAlchemy's ORM for the insert operations and decided to use a db cursor directly. This is possible because we are only interested in submit data in a PostgreSQL instance, so we don't worry about the compatibility layer amoung database engines that provides the ORM.
 
-This command took around 1 minute to insert all of the records in the database, meaning that I had to improve the import process (without using any `COPY` statemen).
+After rewriting the ORM queries as raw SQL queries, the execution time improved dramatically. It took around 12 minutes to complete the task, although, the program was not fast enough.
 
-I decided to drop the fragment of code that relied on the SQLAlchemy ORM and decided to use a db cursor directly to gain the ability to write raw SQL queries, which improved the times dramatically. It took around +12 minutes to complete the process.
+I knew that there was a room to keep improving the code, so I started a research on the `psycopg` documentation, looking for parameters, configurations and utilites that could improve the performance even more. After a while, I came accross a fragment of the documentation which said that since the third major version of the package, every conection created by the database engine used *Server-sided* cursors by default. This kind of cursor offers more reliability and let library users to write pythonic code with results that come from a `cursor.execute` call.
 
-That execution time meant that there was a room to keep improving the code. After some research, I came accross a fragment of the documentation of psycopg which tells that since the third major version of the library, the default cursors were Server-sided cursors instead of the ones used in the version two, that can be considered as Client-sided cursors.
+The Server-sided cursors also splits the queries that have more than a single record in it, which causes an overhead and make harder to define efficient queires with raw sql. So I decided to switch to `Client-sided` cursors. These, are the same than uses `psycopg2`, and they provide an interface to write queries wihtout limiting the amount of records sent and returned as the other cursor type does. The previous benefits come at the cost of compromsing the security abstraction layer that offered by the new cursor type. (An additional comment about this matter can be found in the commit 897960a8e34ad3be5fb7c3f9faeca43e7f3537f3).
 
-It seems that Client-sided cursors let us create more efficient queries at the cost of compromising the security abstraction layer that offers the psycopg. As our goal is reduce the execution time of the program, I decided to use these cursors in the pieces of code that needed a huge improvement. (An additional comment about this matter is in this commit 897960a8e34ad3be5fb7c3f9faeca43e7f3537f3).
+After replacing the `Client-sided` cursors on the bulk insertions and deletions, the process
+took much less time to complete the task: 8 minutes and 53 seconds. Unfortunately, deleting the
+records from the previous import process took too much time (after 10 whole minutes, I
+canceled the delete operation), so I noticed that I needed to change the query in order
+to optimize the execution time.
 
-After improving the insertions, I had to work on deletions. I implemented a table with name ImportRegistry that holds information about the records that has been imported into the model SaleOrder, the one that will contain the data that we are trying to import. I decided to write some critical deletions by using client cursors as well.
+Later, I tested the program and took 8 minutes and 45s to finish, including the
+deletions that must be performed before inserting the new records.
 
-Later, having a working example, I decided to benchmark the program again and the results were impressive: The script took +8 minutes to complete the task!
+Now, Having the program that solves the problem, I started to tune it by changing the value
+of a constant named `CHUNK_SIZE` until I found the optimal size that the chunk must have
+in order to consume the minimal amount of resources.
 
 Finally, I started to clean up the code, add documentation, test the code to check that it's working properly, and finally, adding some features to improve the CLI interface.
 
@@ -257,7 +274,3 @@ Using custom connection settings path and staging:
 ```bash
 env PG_IMPORT_STAGING=QA PG_IMPORT_CONFIG_PATH=../different/location/credentials python3 -m pg_import -i values.csv
 ```
-
-
-
-
