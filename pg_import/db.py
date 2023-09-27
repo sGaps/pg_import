@@ -30,11 +30,6 @@ class ImportRegistry(Base):
     start_id: Mapped[int] = mapped_column()
     end_id: Mapped[int] = mapped_column()
 
-tables = [
-    SaleOrder,
-    ImportRegistry,
-]
-
 
 @contextmanager
 def session_builder():

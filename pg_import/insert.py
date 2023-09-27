@@ -12,6 +12,7 @@ import logging
 _logger = logging.getLogger(__name__)
 
 # TODO: Move to config?
+# TODO: Update measurements
 # CHUNK_SIZE = 1_000_000 # TIME: 12m 27s, RAM: 3   GiB ~ 4GiB
 # CHUNK_SIZE = 100_000   # TIME: 12m 14s, RAM: 410 MiB ~ 450MiB
 # CHUNK_SIZE = 1_000     # TIME: 13n 05s, RAM: 53  MiB ~ 53 MiB
@@ -98,8 +99,11 @@ def unsafe_import_records(session, chunk, ranges_inserted):
         start_id = row[0]
         end_id = row[1]
 
+        # NOTE: It's faster to use short-circuit logic than separating this into a if-else construct.
+        #       This is a safer way to extract the last record if exist one basically.
         current_import_range = ranges_inserted and ranges_inserted[-1]
 
+        # Check whether these ranges are mergeable
         if (current_import_range and start_id == current_import_range.end_id + 1):
             # WE ARE STILL IN THE SAME RANGE, SO WE CAN JOIN THEM IN PLACE
             current_import_range.end_id = end_id
@@ -126,11 +130,13 @@ def main():
 
     with stream as file, session_builder() as session:
         reader = csv.reader(file, delimiter = delimiter)
-        # reader = csv.DictReader(file, delimiter = delimiter)
 
         # NOTE: We avoid using the DictReader because it will impact
         #       the performance negatively. In our case, it's better
         #       to manage the records as tuples or lists instead.
+
+        # NOTE: We always assume that the csv is well formed AKA.
+        #       it has a header and a consistent number of columns.
         header = next(reader)
         _logger.info(f'Retrieved Header: {header}')
 
