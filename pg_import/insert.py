@@ -137,7 +137,7 @@ def main():
 
         # NOTE: We always assume that the csv is well formed AKA.
         #       it has a header and a consistent number of columns.
-        header = next(reader)
+        header = next(reader, '<empty>')
         _logger.info(f'Retrieved Header: {header}')
 
         with session.begin():
