@@ -15,6 +15,12 @@ def cli_parser():
         metavar = '<char>',
         dest    = 'delimiter',
         default = ';',
-        help = 'indicates which column delimiter will be used to read the csv input',
+        help = 'indicates which character will be used as delimiter when reading the csv input',
+    )
+    parser.add_argument(
+        '--no-header',
+        action  = 'store_false',
+        dest    = 'has_header',
+        help    = "when specified, the program won't discard the first line of the file",
     )
     return parser

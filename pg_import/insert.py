@@ -128,6 +128,8 @@ def main():
     stream    = manage_input(args.input)
     delimiter = args.delimiter
 
+    has_header = args.has_header
+
     with stream as file, session_builder() as session:
         reader = csv.reader(file, delimiter = delimiter)
 
@@ -136,9 +138,10 @@ def main():
         #       to manage the records as tuples or lists instead.
 
         # NOTE: We always assume that the csv is well formed AKA.
-        #       it has a header and a consistent number of columns.
-        header = next(reader, '<empty>')
-        _logger.info(f'Retrieved Header: {header}')
+        #       it has a consistent number of columns.
+        if has_header:
+            header = next(reader, '<empty>')
+            _logger.info(f'Retrieved Header: {header}')
 
         with session.begin():
             unsafe_preliminar_delete_import_range(session)
