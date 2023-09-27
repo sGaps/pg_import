@@ -1,3 +1,7 @@
+"""
+    Manages the insertions that must be made
+    in PostgreSQL.
+"""
 import csv
 from itertools import islice
 
